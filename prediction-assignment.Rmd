@@ -1,0 +1,139 @@
+---
+title: "Human Activity Recognition Class Prediction"
+author: "Shenay"
+date: "July 9, 2019"
+output:
+  html_document:
+    fig_caption: yes
+    keep_md: yes
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Synopsis
+In this report, we will focus on predicting the "classe" variable provided in the human activity recognition research training data set. Each of the five classes in the "classe" variable correspond to the specified execution of the exercise (*Class A*) or common mistakes that were made (*Classes B, C, D, and E*). The data was generated from accelerometers placed on the belt, forearm, arm, and dumbell of 6 male participants. 
+
+The source of the data is available [here.](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har). See the section on the weight lifting exercise data set.
+
+The [training](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [testing](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) data sets were retrieved from the given links.
+
+## Load and Process the Data:
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+library(caret)
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+setwd("C:/Users/sheng/Coursera")
+if (!file.exists("./data")) {dir.create("./data")}
+trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(trainURL, destfile = "./data/pml-training.csv", mode = "wb")
+download.file(testURL, destfile = "./data/pml-testing.csv", mode="wb")
+
+train <- read.csv("pml-training.csv", header=TRUE)
+test <- read.csv("pml-testing.csv", header=TRUE)
+
+dim(train); dim(test)
+#str(train); str(test)
+```
+
+Since there are a number of columns with missing values, we need to filter out those that may impact our prediction models. We will choose a benchmark of 50% and remove all variables that contain more than 50% NAs.
+
+```{r}
+train <- train[, -which(colMeans(is.na(train)) > 0.5)]
+test <- test[, -which(colMeans(is.na(test)) > 0.5)]
+```
+
+Next, let's remove unnecessary identifier and timestamp variables. This includes the first seven columns.
+
+```{r}
+train <- train[, -c(1:7)]
+test <- test[, -c(1:7)]
+```
+
+In order to further filter our variables, we choose to remove columns with values that are mostly identical to each other (variance of zero).
+
+```{r message=FALSE, warning=FALSE}
+library(caret)
+zvar <- nearZeroVar(train)
+train <- train[, -zvar]
+```
+
+To check for correlations among variables, we will compute the correlation matrix.
+
+```{r fig.height=10, fig.width=10}
+corMatrix <- cor(train[, -53])
+corrplot::corrplot(corMatrix, method="circle", order="FPC", type="lower", 
+                   tl.col="black", tl.cex=0.6, tl.srt=45)
+```
+
+Based on the correlation matrix above, it seems that accel_belt_z & accel_arm_y is highly associated with yaw_belt, total_accel_belt, roll_belt, and accel_belt_y with correlation values close to 1. However, these variables will not be omitted from our training data set during this analysis since 52 explanatory variables are sufficient.
+
+## Partition Training Data:
+
+We will further partition the training data set into 70/30 training_data vs. testing_data for cross validation purposes.
+
+```{r}
+set.seed(1234)
+indexes <- createDataPartition(train$classe, times = 1,
+                               p = 0.7, list = FALSE)
+
+train_data <- train[indexes, ]
+test_data <- train[-indexes, ]
+
+dim(train_data); dim(test_data)
+```
+
+## Random Forest Prediction:
+
+```{r cache=TRUE}
+modFit_rf <- train(classe ~ ., method="rf", data=train_data)
+print(modFit_rf$finalModel)
+
+predict_rf <- predict(modFit_rf, newdata=test_data)
+confMatrix_rf <- confusionMatrix(predict_rf, test_data$classe)
+confMatrix_rf
+```
+
+According to the random forest prediction model, the estimated accuracy rate is around 99.39%.
+
+## Decision Tree Prediction:
+
+```{r fig.height=10, fig.width=10, cache=TRUE}
+modFit_dt <- rpart::rpart(classe ~ ., method="class", data=train_data)
+rattle::fancyRpartPlot(modFit_dt)
+
+predict_dt <- predict(modFit_dt, type="class", newdata=test_data)
+confMatrix_dt <- confusionMatrix(predict_dt, test_data$classe)
+confMatrix_dt
+```
+
+As shown from the confusion matrix, the approximate accuracy rate of the decision tree prediction model is 68.79%.
+
+## Bagging Prediction:
+
+```{r cache=TRUE}
+modFit_gb <- train(classe ~ ., method="gbm", data=train_data, verbose=FALSE)
+modFit_gb
+
+predict_gb <- predict(modFit_gb, newdata=test_data)
+confMatrix_gb <- confusionMatrix(predict_gb, test_data$classe)
+confMatrix_gb
+```
+
+Results from applying a gradient boosting model to our training data subset indicate that the estimated accuracy rate is about 95.72%.
+
+## Predict with Testing Data:
+
+Because the random forest model has the highest cross-validation accuracy rate, we will use its fitted model to predict our final testing data set of 20 individuals.
+
+```{r}
+rf_prediction <- predict(modFit_rf, test)
+rf_prediction
+```
